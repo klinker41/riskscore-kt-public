@@ -1,0 +1,5 @@
+include ':support'
+include ':kalman1d'
+include ':riskscorechecker'
+include ':riskscore'
+rootProject.name = "RiskScore"
