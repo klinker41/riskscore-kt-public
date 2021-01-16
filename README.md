@@ -9,6 +9,12 @@ There is an example configuration at `RiskScoreCalculatorConfiguration.exampleCo
 
 The risk score is computed from the list of [`ScanInstance`s](https://developers.google.com/android/reference/com/google/android/gms/nearby/exposurenotification/ScanInstance) associated with a single exposure window.
 
+For a sample, data is available at https://github.com/nhsx/gaen_data-public. This data can be tested by running
+
+```
+./gradlew run
+```
+
 ### Adding as a dependency
 
 Include the following to the `repositories` block in your module's `build.gradle` file

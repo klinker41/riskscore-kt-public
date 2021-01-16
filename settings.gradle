@@ -1,3 +1,4 @@
+include ':proto'
 include ':support'
 include ':kalman1d'
 include ':riskscorechecker'
