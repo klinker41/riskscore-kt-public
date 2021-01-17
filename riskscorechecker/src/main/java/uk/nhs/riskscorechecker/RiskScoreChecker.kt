@@ -1,48 +1,81 @@
 package uk.nhs.riskscorechecker
 
-import kotlinx.cli.ArgParser
-import kotlinx.cli.ArgType
-import kotlinx.cli.default
+import com.google.protobuf.util.JsonFormat
 import uk.nhs.riskscore.RiskScoreCalculator
 import uk.nhs.riskscore.RiskScoreCalculatorConfiguration.Companion.exampleConfiguration
-import uk.nhs.riskscorechecker.NumberToCompute.All
-import uk.nhs.riskscorechecker.NumberToCompute.Number
+import uk.nhs.riskscore.ScanInstance
 import uk.nhs.support.InstanceName
-import uk.nhs.support.RiskScoreResultsCSVDecoder
 import uk.nhs.support.RiskScoreValue
-import uk.nhs.support.ScanInstanceCSVDecoder
 import java.io.File
+import com.google.en.riskscore.Experiment
 
-fun main(args: Array<String>) {
-    val parser = ArgParser("risk-score-checker")
-
-    val scanInstanceDir by parser.argument(ArgType.String, description = "The path to the scaninstance directory")
-    val riskScorePath by parser.argument(ArgType.String, description = "The path to the riskscore file")
-    val number by parser.option(NumberToComputeChoice, shortName = "n", description = "The number of scaninstances to calculate")
-        .default(All)
-    parser.parse(args)
-
-    val expectedResults = RiskScoreResultsCSVDecoder.decode(riskScorePath)
-
-    println("experiment python kotlin")
-    computeScores(number, scanInstanceDir).forEach { (instance, riskscore) ->
-        val expectedScore = checkNotNull(expectedResults.get(instance)) { "Cannot find result for ${instance.name}" }
-        println("${instance.name} ${expectedScore.score} ${riskscore.score}")
+fun main() {
+    computeScores(parseJsonFiles()).forEach { (instance, riskScore) ->
+        println("${instance.name}: ${riskScore.score}")
     }
 }
 
-fun computeScores(number: NumberToCompute, scanInstanceDir: String): Sequence<Pair<InstanceName, RiskScoreValue>> {
-    val calculator = RiskScoreCalculator(exampleConfiguration)
+fun parseJsonFiles(): Sequence<Pair<InstanceName, List<ScanInstance>>> {
+    return getResourceFile("/test_results").walk()
+        .filter { file -> file.name.endsWith(".json") }
+        .flatMap { file -> parseScanInstances(file) }
+}
 
-    val maximum = when (number) {
-        is All -> Int.MAX_VALUE
-        is Number -> number.maximum
+fun getResourceFile(path: String): File {
+    return File(object {}.javaClass.getResource(path).file)
+}
+
+fun parseScanInstances(file: File): Sequence<Pair<InstanceName, List<ScanInstance>>> {
+    var experiment = parseExperiment(file)
+    return sequence {
+        experiment.getParticipantsList().forEach { participant ->
+            participant.getResultsList().forEach { result ->
+                result.getCounterpartsList().forEach { counterpart ->
+                    if (counterpart.getExposureWindowsCount() > 0) {
+                        // TODO(jklinker): Are we supposed to combine all scan instances from all
+                        //  exposure windows for a counterpart, or process some other way?
+                        var scans = mutableListOf<ScanInstance>()
+                        counterpart.getExposureWindowsList().forEach { exposureWindow ->
+                            exposureWindow.getScanInstancesList().forEach { scanInstance ->
+                                scans.add(
+                                    // TODO(jklinker): Do scan instances take typical attenuation
+                                    // or min attenuation?
+                                    ScanInstance(
+                                        scanInstance.getTypicalAttenuationDb(),
+                                        scanInstance.getSecondsSinceLastScan()
+                                    )
+                                )
+                            }
+                        }
+                        yield(
+                            Pair(
+                                InstanceName(
+                                    "${file.name.removeSuffix(".json")}: " +
+                                            "${participant.getDeviceName()} -> " +
+                                            "${counterpart.getDeviceName()}"),
+                                scans.toList()
+                            )
+                        )
+                    }
+                }
+            }
+        }
     }
+}
 
-    return File(scanInstanceDir).walk().maxDepth(1).filter(File::isFile).take(maximum).map { file ->
-        val instances = ScanInstanceCSVDecoder.decode(file.path)
-        val score = calculator.calculate(instances)
-        Pair(InstanceName(file.name), RiskScoreValue(score))
+fun parseExperiment(file: File): Experiment {
+    var experiment = Experiment.newBuilder()
+    JsonFormat.parser().merge(file.readText(), experiment)
+    return experiment.build()
+}
+
+fun computeScores(
+    scans: Sequence<Pair<InstanceName, List<ScanInstance>>>
+): Sequence<Pair<InstanceName, RiskScoreValue>> {
+    val calculator = RiskScoreCalculator(exampleConfiguration)
+    return scans.map { (name, scans) ->
+        val score = calculator.calculate(scans)
+        Pair(name, RiskScoreValue(score))
     }
 }
 
